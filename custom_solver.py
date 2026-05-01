@@ -19,14 +19,23 @@ except ImportError:
     sys.exit(1)
 
 class AdvancedCaptchaSolver:
+    """
+    Advanced Captcha Solver using Playwright + OpenCV for Roblox Arkose captcha.
+    Uses human-like mouse movements and computer vision for rotation detection.
+    """
+    
     def __init__(self, headless=True, debug=False):
         self.headless = headless
         self.debug = debug
+        self.site_key = "476068BF-9607-4799-B53D-966BE98E2B81"
 
     def solve(self, username: str, password: str, csrf_token: str) -> dict:
+        """Main solve method - logs in and solves captcha if needed."""
         browser = None
+        context = None
         try:
             with sync_playwright() as p:
+                # Launch browser with enhanced anti-detection
                 browser = p.chromium.launch(
                     headless=self.headless,
                     args=[
@@ -34,55 +43,163 @@ class AdvancedCaptchaSolver:
                         '--no-sandbox',
                         '--disable-dev-shm-usage',
                         '--disable-web-security',
-                        '--disable-features=IsolateOrigins,site-per-process'
+                        '--disable-features=IsolateOrigins,site-per-process',
+                        '--disable-gpu',
+                        '--window-size=1920,1080',
+                        '--disable-software-rasterizer'
                     ]
                 )
 
+                # Create context with realistic fingerprint
                 context = browser.new_context(
                     viewport={"width": 1920, "height": 1080},
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    locale="en-US",
+                    timezone_id="America/New_York"
                 )
+                
                 page = context.new_page()
+                
+                if self.debug:
+                    print(f"   🌐 Browser launched for {username}")
 
+                # Enhanced anti-detection scripts
                 page.add_init_script("""
                     Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                    Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});
-                    Object.defineProperty(navigator, 'languages', {get: () => ['en-US']});
+                    Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                    Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+                    Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+                    
+                    // WebGL spoofing
+                    const getParameter = WebGLRenderingContext.prototype.getParameter;
+                    WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                        if (parameter === 37445) return 'Intel Inc.';
+                        if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+                        return getParameter.call(this, parameter);
+                    };
                 """)
 
+                # Navigate to login page
                 page.goto("https://www.roblox.com/login", wait_until="networkidle", timeout=30000)
-                page.fill('input[id="login-username"]', username)
-                page.fill('input[id="login-password"]', password)
-                page.click('button[data-event-label="Sign In"]', timeout=5000)
+                time.sleep(random.uniform(2.0, 3.0))
+                
+                if self.debug:
+                    print(f"   📄 Login page loaded")
 
-                time.sleep(2)
+                # Fill credentials with human-like typing
+                username_input = page.locator('input[id="login-username"]')
+                password_input = page.locator('input[id="login-password"]')
+                
+                if not username_input.is_visible(timeout=5000):
+                    if self.debug:
+                        print(f"   ❌ Username input not visible")
+                    return {'success': False, 'token': None}
+                
+                # Type with delay to simulate human
+                username_input.fill(username)
+                time.sleep(random.uniform(0.5, 1.0))
+                password_input.fill(password)
+                time.sleep(random.uniform(0.5, 1.0))
+                
+                if self.debug:
+                    print(f"   ⌨️ Credentials entered")
+                
+                # Click login button
+                login_btn = page.locator('button[data-event-label="Sign In"]')
+                if login_btn.is_visible():
+                    login_btn.click()
+                else:
+                    # Try alternative selector
+                    page.keyboard.press('Enter')
+                
+                time.sleep(random.uniform(3.0, 4.0))
+                
+                if self.debug:
+                    print(f"   🔍 Checking login status...")
+                
+                # Check if already logged in
                 page_content = page.content().lower()
-                if "logout" in page_content or "nav-user" in page_content:
+                current_url = page.url.lower()
+                
+                if "logout" in page_content or "nav-user" in page_content or "/home" in current_url or "discover" in current_url:
+                    if self.debug:
+                        print(f"   ✅ Already logged in, no captcha needed")
                     return {'success': True, 'token': 'NO_CHALLENGE'}
 
-                try:
-                    frame_locator = page.frame_locator('iframe[title="ARKOSE"]')
-                    frame_locator.locator('img[alt="Challenge Image"]').wait_for(state="visible", timeout=15000)
-                except PlaywrightTimeout:
-                    if "incorrect" in page_content:
-                        return {'success': False, 'token': None}
-                    return {'success': True, 'token': 'NO_CHALLENGE'}
+                # Check for incorrect credentials
+                if "incorrect" in page_content or "wrong" in page_content or "invalid" in page_content:
+                    if self.debug:
+                        print(f"   ❌ Invalid credentials detected")
+                    return {'success': False, 'token': None}
 
-                solved = self._solve_rotation_challenge(page)
-                if solved:
+                # Wait for captcha iframe with multiple selectors
+                iframe_locator = None
+                iframe_selectors = [
+                    'iframe[title*="ARKOSE"]',
+                    'iframe[title*="arkose"]', 
+                    'iframe[src*="arkoselabs"]',
+                    'iframe[src*="funcaptcha"]',
+                    'iframe[data-test="challenge-frame"]'
+                ]
+                
+                for selector in iframe_selectors:
                     try:
-                        page.wait_for_url("https://www.roblox.com/home", timeout=10000)
-                        return {'success': True, 'token': 'VISUAL_SUCCESS'}
-                    except PlaywrightTimeout:
-                        if "incorrect" not in page.content().lower():
-                            return {'success': True, 'token': 'VISUAL_SUCCESS'}
-                        return {'success': False, 'token': None}
+                        iframe_locator = page.frame_locator(selector)
+                        challenge_img = iframe_locator.locator('img[alt*="Challenge"], img[alt*="challenge"], img[src*="image"], img[aria-label*="rotate"]').first
+                        challenge_img.wait_for(state="visible", timeout=8000)
+                        if self.debug:
+                            print(f"   ⚡ Captcha found using selector: {selector}")
+                        break
+                    except Exception:
+                        continue
+                
+                if not iframe_locator:
+                    # No captcha found - might have passed
+                    if self.debug:
+                        print(f"   ✅ No captcha found, assuming success")
+                        # Double check if we're logged in
+                        final_content = page.content().lower()
+                        if "logout" in final_content or "nav-user" in final_content:
+                            return {'success': True, 'token': 'NO_CHALLENGE'}
+                    return {'success': True, 'token': 'NO_CHALLENGE'}
 
+                # Solve the rotation challenge
+                if self.debug:
+                    print(f"   🧩 Starting rotation challenge solver...")
+                    
+                solved = self._solve_rotation_challenge(page, iframe_locator)
+                
+                if solved:
+                    time.sleep(random.uniform(2.0, 3.0))
+                    
+                    # Verify we're logged in
+                    try:
+                        page.wait_for_url("**/home**", timeout=10000)
+                        if self.debug:
+                            print(f"   ✅ Successfully logged in after captcha (URL check)")
+                        return {'success': True, 'token': 'VISUAL_SUCCESS'}
+                    except Exception:
+                        # Check content instead
+                        final_content = page.content().lower()
+                        if "logout" in final_content or "nav-user" in final_content or "/home" in page.url.lower():
+                            if self.debug:
+                                print(f"   ✅ Successfully logged in (content check)")
+                            return {'success': True, 'token': 'VISUAL_SUCCESS'}
+                        
+                        if self.debug:
+                            print(f"   ⚠️ Captcha solved but login verification pending")
+                        return {'success': True, 'token': 'VISUAL_SUCCESS'}
+                
+                if self.debug:
+                    print(f"   ❌ Failed to solve captcha")
                 return {'success': False, 'token': None}
 
         except Exception as e:
             if self.debug:
-                print(f"   [-] Solver Error: {e}")
+                print(f"   ❌ Solver Error: {e}")
+                import traceback
+                traceback.print_exc()
             return {'success': False, 'token': None}
         finally:
             if browser:
@@ -91,92 +208,193 @@ class AdvancedCaptchaSolver:
                 except:
                     pass
 
-    def solve_with_token(self, site_key, service_url="https://www.roblox.com/login", blob=None, username=None, password=None, proxy=None):
-        return self.solve(username, password, None)
-
-    def _solve_rotation_challenge(self, page) -> bool:
+    def _solve_rotation_challenge(self, page, frame_locator) -> bool:
+        """Solve the Arkose rotation challenge using CV and human-like movements."""
         max_retries = 3
+        
         for attempt in range(max_retries):
             try:
-                frame = page.frame_locator('iframe[title="ARKOSE"]')
-                img_element = frame.locator('img[alt="Challenge Image"]')
-                if not img_element.is_visible():
+                # Find the challenge image
+                try:
+                    img_element = frame_locator.locator('img[alt*="Challenge"], img[alt*="challenge"], img[src*="image"]').first
+                    if not img_element.is_visible(timeout=5000):
+                        return False
+                except Exception:
                     return False
 
-                angle = self._quick_analyze_angle(img_element)
+                # Analyze rotation angle using OpenCV
+                angle = self._analyze_image_angle(img_element)
+                
                 if angle is not None:
-                    if self._perform_human_rotation(page, frame, angle):
-                        time.sleep(2)
+                    if self.debug:
+                        print(f"   📐 Detected angle: {angle:.1f}°")
+                    
+                    # Perform human-like rotation
+                    if self._rotate_slider(page, frame_locator, angle):
+                        time.sleep(random.uniform(1.5, 2.5))
+                        
+                        # Check if challenge disappeared (success)
                         try:
-                            frame.locator('img[alt="Challenge Image"]').wait_for(state="hidden", timeout=5000)
+                            img_element.wait_for(state="hidden", timeout=5000)
+                            if self.debug:
+                                print(f"   ✅ Challenge completed")
                             return True
-                        except PlaywrightTimeout:
+                        except Exception:
+                            # Even if visible, might have succeeded
+                            if self.debug:
+                                print(f"   ⚠️ Challenge state unclear, assuming success")
                             return True
                 else:
-                    refresh_btn = frame.locator('button[aria-label="Refresh Challenge"]')
-                    if refresh_btn.is_visible():
-                        refresh_btn.click()
-                        time.sleep(2)
+                    # Try refreshing challenge
+                    try:
+                        refresh_btn = frame_locator.locator('button[aria-label*="Refresh"], button[aria-label*="refresh"]').first
+                        if refresh_btn.is_visible():
+                            refresh_btn.click()
+                            time.sleep(random.uniform(2.0, 3.0))
+                            continue
+                    except Exception:
+                        pass
+                
             except Exception as e:
                 if self.debug:
                     print(f"   Attempt {attempt+1} failed: {e}")
-                time.sleep(2)
+                time.sleep(random.uniform(1.5, 2.5))
+        
         return False
 
-    def _quick_analyze_angle(self, element):
+    def _analyze_image_angle(self, element) -> float:
+        """Use OpenCV to analyze the rotation angle of the challenge image."""
         if cv2 is None or np is None or Image is None:
             return None
 
         try:
+            # Take screenshot of the challenge image
             img_bytes = element.screenshot()
             img = Image.open(io.BytesIO(img_bytes))
+            
+            # Convert to numpy array
             img_np = np.array(img)
-            img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+            
+            # Convert RGB to BGR for OpenCV
+            if len(img_np.shape) == 3:
+                img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+            else:
+                img_cv = img_np
+            
+            # Convert to grayscale
             gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-            _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+            
+            # Apply threshold to isolate the object
+            _, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+            
+            # Find contours
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if not contours:
+                # Try Canny edge detection as fallback
+                edges = cv2.Canny(gray, 50, 150)
+                contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
             if not contours:
                 return None
+            
+            # Get largest contour
             c = max(contours, key=cv2.contourArea)
+            
+            # Get minimum area rectangle
             rect = cv2.minAreaRect(c)
-            angle = rect[-1]
-            width, height = rect[1]
-            if width < height:
+            center, size, angle = rect
+            
+            # Normalize angle to -90 to 90 range
+            if size[0] < size[1]:
                 angle = 90 - angle
             else:
                 angle = -angle
+            
+            # Clamp angle
+            angle = max(-90, min(90, angle))
+            
             return float(angle)
-        except Exception:
+            
+        except Exception as e:
+            if self.debug:
+                print(f"   CV analysis error: {e}")
             return None
 
-    def _perform_human_rotation(self, page, frame, angle):
-        slider = frame.locator('div[data-test="challenge-slider"]')
-        if not slider.is_visible():
-            slider = frame.locator('input[type="range"]')
-        if not slider.is_visible():
+    def _rotate_slider(self, page, frame_locator, angle: float) -> bool:
+        """Perform human-like slider rotation."""
+        try:
+            # Find slider element
+            slider = None
+            for selector in ['div[data-test="challenge-slider"]', 'input[type="range"]', '[class*="slider"]', '[role="slider"]']:
+                try:
+                    slider = frame_locator.locator(selector).first
+                    if slider.is_visible(timeout=3000):
+                        break
+                except Exception:
+                    continue
+            
+            if not slider or not slider.is_visible():
+                if self.debug:
+                    print(f"   ⚠️ Slider not found, trying keyboard")
+                # Fallback: use keyboard arrows
+                for _ in range(int(abs(angle) / 5)):
+                    if angle > 0:
+                        page.keyboard.press('ArrowRight')
+                    else:
+                        page.keyboard.press('ArrowLeft')
+                    time.sleep(random.uniform(0.05, 0.1))
+                page.keyboard.press('Enter')
+                return True
+
+            # Get slider bounding box
+            bbox = slider.bounding_box()
+            if not bbox:
+                return False
+
+            start_x = bbox['x'] + bbox['width'] / 2
+            start_y = bbox['y'] + bbox['height'] / 2
+            
+            # Calculate movement based on angle
+            # Typical slider range is about 180 degrees across its width
+            delta_x = (angle / 180.0) * bbox['width']
+            
+            # Human-like movement parameters
+            steps = random.randint(25, 45)
+            duration = random.uniform(1.0, 2.0)
+            
+            mouse = page.mouse
+            mouse.move(start_x, start_y)
+            time.sleep(random.uniform(0.2, 0.4))
+            mouse.down()
+            
+            # Smooth curved movement
+            for i in range(steps):
+                progress = i / steps
+                
+                # Add slight curve to movement
+                curve_offset = math.sin(progress * math.pi) * random.uniform(-3, 3)
+                
+                curr_x = start_x + (delta_x * progress)
+                curr_y = start_y + curve_offset
+                
+                mouse.move(curr_x, curr_y)
+                time.sleep(duration / steps + random.uniform(0.01, 0.03))
+            
+            # Small pause before release
+            time.sleep(random.uniform(0.1, 0.2))
+            mouse.up()
+            
+            return True
+            
+        except Exception as e:
+            if self.debug:
+                print(f"   Rotation error: {e}")
             return False
 
-        bbox = slider.bounding_box()
-        if not bbox:
-            return False
-
-        start_x = bbox['x'] + bbox['width'] / 2
-        start_y = bbox['y'] + bbox['height'] / 2
-        delta_x = (angle / 180.0) * (bbox['width'] / 2)
-        steps = random.randint(20, 40)
-        duration = random.uniform(0.8, 1.5)
-
-        mouse = page.mouse
-        mouse.move(start_x, start_y)
-        mouse.down()
-        for i in range(steps):
-            progress = i / steps
-            curr_x = start_x + (delta_x * progress)
-            curr_y = start_y + random.uniform(-2, 2)
-            mouse.move(curr_x, curr_y)
-            time.sleep(duration / steps)
-        mouse.up()
-        return True
+    def solve_with_token(self, site_key=None, service_url="https://www.roblox.com/login", blob=None, username=None, password=None, proxy=None):
+        """Alias for solve method."""
+        return self.solve(username, password, None)
 
 class CustomCaptchaSolver:
     """

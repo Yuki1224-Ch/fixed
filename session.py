@@ -101,6 +101,11 @@ class RobloxSession:
 
         try:
             resp = self.session.post(url, json=payload, headers=headers, timeout=15)
+            # Get fresh CSRF from response headers (Roblox rotates them)
+            new_csrf = resp.headers.get('x-csrf-token')
+            if new_csrf and len(new_csrf) > 10:
+                self.csrf_token = new_csrf
+            
             data = resp.json() if resp.text else {}
 
             if resp.status_code == 200 and data.get("user"):
@@ -120,7 +125,8 @@ class RobloxSession:
                 msg = str(err.get("message", ""))
                 lower_msg = msg.lower()
 
-                if code == 10 or code == "CaptchaRequired" or "captcha" in lower_msg:
+                # Check for captcha requirement (including challenge required)
+                if code == 10 or code == "CaptchaRequired" or "captcha" in lower_msg or "challenge is required" in lower_msg:
                     self.needs_captcha = True
                     self.captcha_blob = err.get("context", {}).get("captchaBlob") or msg
                     return {'status': 'captcha', 'message': 'Captcha required', 'csrf': resp.headers.get('x-csrf-token', '')}
@@ -137,6 +143,11 @@ class RobloxSession:
             full_text = str(errors).lower()
             if "incorrect" in full_text or "wrong" in full_text:
                 return {'status': 'invalid', 'message': 'Credentials incorrect'}
+            
+            # If we get a challenge required error, treat it as captcha
+            if "challenge is required" in full_text:
+                self.needs_captcha = True
+                return {'status': 'captcha', 'message': 'Challenge required', 'csrf': resp.headers.get('x-csrf-token', '')}
 
             return {'status': 'error', 'message': f'Unexpected error: {errors}', 'retry': True}
 
@@ -151,6 +162,7 @@ class RobloxSession:
     def solve_captcha_and_retry(self, username: str, password: str, csrf_token: str, solver_func) -> Dict[str, Any]:
         """
         Handles the full flow: Solve Captcha -> Submit Token -> Verify Login
+        Enhanced to properly handle VISUAL_SUCCESS and NO_CHALLENGE tokens.
         """
         self.username = username
         self.password = password
@@ -162,20 +174,33 @@ class RobloxSession:
         result = solver_func(username, password, csrf_token)
 
         if not result or not result.get('success'):
+            print(f"   ❌ Solver failed for {username}")
             return {'status': 'captcha_failed', 'message': 'Solver failed to get token'}
 
         token = result.get('token')
-        if not token:
-            return {'status': 'captcha_failed', 'message': 'Solver returned empty token'}
-
+        
+        # Handle special tokens from visual solver
         if token == 'NO_CHALLENGE':
             print(f"   ✅ No captcha required, retrying login...")
+            # Just retry login without captcha token
+            return self._retry_login(username, password, csrf_token, captcha_token=None)
+        
         elif token == 'VISUAL_SUCCESS':
             print(f"   ✅ Captcha visually solved! Retrying login...")
-        else:
+            # The browser session already solved it, just need to verify
+            return self._retry_login(username, password, csrf_token, captcha_token='VISUAL_SUCCESS')
+        
+        elif token and len(token) > 20:
             print(f"   ✅ Captcha Solved! Token: {token[:20]}...")
             self.session.headers['x-captcha-token'] = token
+            return self._retry_login(username, password, csrf_token, captcha_token=token)
+        
+        else:
+            print(f"   ❌ Invalid token received")
+            return {'status': 'captcha_failed', 'message': 'Solver returned invalid token'}
 
+    def _retry_login(self, username: str, password: str, csrf_token: str, captcha_token=None) -> Dict[str, Any]:
+        """Retry login after captcha is solved."""
         self.needs_captcha = False
 
         url = "https://auth.roblox.com/v2/login"
@@ -183,8 +208,12 @@ class RobloxSession:
             "ctype": "username",
             "cvalue": username,
             "password": password,
-            "captchaToken": token
         }
+        
+        # Only add captchaToken if we have a real token (not VISUAL_SUCCESS)
+        if captcha_token and captcha_token != 'VISUAL_SUCCESS':
+            payload["captchaToken"] = captcha_token
+            
         headers = {
             "Content-Type": "application/json",
             "x-csrf-token": csrf_token,

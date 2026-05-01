@@ -121,8 +121,9 @@ def check_account_task(account_line, proxy_dict):
             add_log(f"⚡ Captcha detected for {username}...", "yellow")
             csrf = login_result.get('csrf')
             if not csrf:
-                stats["errors"] += 1
-                stats["checked"] += 1
+                with stats_lock:
+                    stats["errors"] += 1
+                    stats["checked"] += 1
                 add_log(f"⚠️ Captcha detected but no CSRF token for {username}", "red")
                 return
 
@@ -148,6 +149,7 @@ def check_account_task(account_line, proxy_dict):
                 
                 with stats_lock:
                     stats["valid"] += 1
+                    stats["captcha_solved"] += 1
                     stats["checked"] += 1
                 
                 # Save
@@ -211,7 +213,7 @@ def main():
     else:
         proxy_list = (proxies * (len(accounts) // len(proxies) + 1))[:len(accounts)]
     
-    threads = config.get("threads", 3)
+    threads = config.get("threads", 5)
     console.print(f"[green]⚙️ Loaded {len(accounts)} accounts, {len(proxies)} proxies. Using {threads} threads.[/green]")
     time.sleep(2)
 
@@ -275,7 +277,9 @@ def main():
                 
                 for future in as_completed(futures):
                     progress.advance(task_id)
-                    # Automatic refresh at 4 refreshes/sec handles UI updates 
+                    # Update footer after each completion to show fresh stats
+                    layout["footer"].update(make_footer())
+                    live.refresh()
 
         console.print("\n[bold green]✅ Complete! Check 'valid_accounts.txt'[/bold green]")
         

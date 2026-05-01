@@ -1,0 +1,18 @@
+{
+    "threads": 1,
+    "useCustomSolver": true,
+    "2captchaKey": "",
+    "debug": false,
+    "skipCombos": {
+        "skip_invalid": true,
+        "skip_checked": true
+    },
+    "autoSecure": {
+        "password": {
+            "enabled": false,
+            "prefix": ""
+        }
+    },
+    "logWebhook": false,
+    "webhooks": {}
+}

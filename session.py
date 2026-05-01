@@ -168,40 +168,57 @@ class RobloxSession:
         self.password = password
 
         if not self.needs_captcha:
-            return {'status': 'error', 'message': 'No captcha challenge present'}
+            print(f"   ⚠️ No captcha needed, retrying login directly...")
+            return self._retry_login(username, password, csrf_token, captcha_token=None)
 
         print(f"   ⚡ Solving Captcha for {username}...")
-        result = solver_func(username, password, csrf_token)
+        try:
+            result = solver_func(username, password, csrf_token)
+        except Exception as e:
+            print(f"   ❌ Solver exception: {e}")
+            return {'status': 'captcha_failed', 'message': f'Solver exception: {str(e)}'}
 
-        if not result or not result.get('success'):
-            print(f"   ❌ Solver failed for {username}")
+        if not result:
+            print(f"   ❌ Solver returned None for {username}")
+            return {'status': 'captcha_failed', 'message': 'Solver returned None'}
+            
+        if not result.get('success'):
+            print(f"   ❌ Solver failed for {username} - {result.get('token', 'no token')}")
             return {'status': 'captcha_failed', 'message': 'Solver failed to get token'}
 
         token = result.get('token')
+        print(f"   📝 Solver returned token: {token}")
         
         # Handle special tokens from visual solver
         if token == 'NO_CHALLENGE':
             print(f"   ✅ No captcha required, retrying login...")
             # Just retry login without captcha token
-            return self._retry_login(username, password, csrf_token, captcha_token=None)
+            retry_result = self._retry_login(username, password, csrf_token, captcha_token=None)
+            print(f"   📝 Retry login result: {retry_result}")
+            return retry_result
         
         elif token == 'VISUAL_SUCCESS':
             print(f"   ✅ Captcha visually solved! Retrying login...")
             # The browser session already solved it, just need to verify
-            return self._retry_login(username, password, csrf_token, captcha_token='VISUAL_SUCCESS')
+            retry_result = self._retry_login(username, password, csrf_token, captcha_token='VISUAL_SUCCESS')
+            print(f"   📝 Retry login result: {retry_result}")
+            return retry_result
         
         elif token and len(token) > 20:
             print(f"   ✅ Captcha Solved! Token: {token[:20]}...")
             self.session.headers['x-captcha-token'] = token
-            return self._retry_login(username, password, csrf_token, captcha_token=token)
+            retry_result = self._retry_login(username, password, csrf_token, captcha_token=token)
+            print(f"   📝 Retry login result: {retry_result}")
+            return retry_result
         
         else:
-            print(f"   ❌ Invalid token received")
-            return {'status': 'captcha_failed', 'message': 'Solver returned invalid token'}
+            print(f"   ❌ Invalid token received: {token}")
+            return {'status': 'captcha_failed', 'message': f'Solver returned invalid token: {token}'}
 
     def _retry_login(self, username: str, password: str, csrf_token: str, captcha_token=None) -> Dict[str, Any]:
         """Retry login after captcha is solved."""
         self.needs_captcha = False
+        print(f"   🔄 Retrying login for {username}...")
 
         url = "https://auth.roblox.com/v2/login"
         payload = {
@@ -222,16 +239,21 @@ class RobloxSession:
 
         try:
             resp = self.session.post(url, json=payload, headers=headers, timeout=15)
+            print(f"   📝 Response status: {resp.status_code}")
             data = resp.json() if resp.text else {}
+            print(f"   📝 Response data keys: {data.keys() if data else 'empty'}")
 
             if resp.status_code == 200 and data.get('user'):
                 self.is_logged_in = True
                 self.user_id = data['user'].get('id')
+                self.username = data['user'].get('userName', username)
                 if '.ROBLOSECURITY' in resp.cookies:
                     self.session.cookies.set('.ROBLOSECURITY', resp.cookies['.ROBLOSECURITY'])
+                print(f"   ✅ Login successful! User ID: {self.user_id}")
                 return {'status': 'success', 'message': 'Logged in after captcha'}
 
             errors = data.get('errors', [])
+            print(f"   ⚠️ Login errors: {errors}")
             for err in errors:
                 code = err.get('code')
                 msg = str(err.get('message', '')).lower()
@@ -243,6 +265,7 @@ class RobloxSession:
 
             return {'status': 'error', 'message': 'Login retry failed', 'retry': True}
         except Exception as e:
+            print(f"   ❌ Retry exception: {e}")
             return {'status': 'error', 'message': f'Retry request failed: {str(e)}'}
 
     def get_account_info(self):

@@ -1,4 +1,1 @@
-```
-__pycache__/
-*.pyc
-```
+(custom_solver.py, main.py, session.py)

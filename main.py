@@ -61,13 +61,17 @@ def check_account_task(account_line, proxy_dict):
     """Worker function"""
     try:
         if ':' not in account_line:
-            update_stats("invalid")
+            with stats_lock:
+                stats["invalid"] += 1
+                stats["checked"] += 1
             add_log(f"❌ Invalid format: {account_line[:20]}...", "red")
             return
 
         parts = account_line.strip().split(':', 1)
         if len(parts) != 2:
-            update_stats("invalid")
+            with stats_lock:
+                stats["invalid"] += 1
+                stats["checked"] += 1
             add_log(f"❌ Invalid format: {account_line[:20]}...", "red")
             return
             
@@ -88,7 +92,9 @@ def check_account_task(account_line, proxy_dict):
             robux = info.get("robux", 0)
             premium = info.get("premium", False)
             
-            update_stats("valid")
+            with stats_lock:
+                stats["valid"] += 1
+                stats["checked"] += 1
             
             result_line = f"{account_line.strip()} | Robux: {robux} | Premium: {premium}"
             with open("valid_accounts.txt", "a", encoding="utf-8") as f:
@@ -98,12 +104,16 @@ def check_account_task(account_line, proxy_dict):
             return
             
         elif status == 'invalid':
-            update_stats("invalid")
+            with stats_lock:
+                stats["invalid"] += 1
+                stats["checked"] += 1
             add_log(f"❌ {username}: Invalid credentials", "red")
             return
             
         elif status == 'banned':
-            update_stats("errors")
+            with stats_lock:
+                stats["errors"] += 1
+                stats["checked"] += 1
             add_log(f"🔒 {username}: Banned or locked", "red")
             return
             
@@ -111,7 +121,8 @@ def check_account_task(account_line, proxy_dict):
             add_log(f"⚡ Captcha detected for {username}...", "yellow")
             csrf = login_result.get('csrf')
             if not csrf:
-                update_stats("errors")
+                stats["errors"] += 1
+                stats["checked"] += 1
                 add_log(f"⚠️ Captcha detected but no CSRF token for {username}", "red")
                 return
 
@@ -135,7 +146,9 @@ def check_account_task(account_line, proxy_dict):
                 robux = info.get("robux", 0)
                 premium = info.get("premium", False)
                 
-                update_stats("valid")
+                with stats_lock:
+                    stats["valid"] += 1
+                    stats["checked"] += 1
                 
                 # Save
                 result_line = f"{account_line.strip()} | Robux: {robux} | Premium: {premium}"
@@ -147,20 +160,28 @@ def check_account_task(account_line, proxy_dict):
                 console.print(f"[green]   ✅ {username} validated with {robux} Robux![/green]")
                 return
             elif solve_result.get('status') == 'invalid':
-                update_stats("invalid")
+                with stats_lock:
+                    stats["invalid"] += 1
+                    stats["checked"] += 1
                 add_log(f"❌ {username}: Invalid credentials (post-captcha)", "red")
                 return
             else:
-                update_stats("errors")
+                with stats_lock:
+                    stats["errors"] += 1
+                    stats["checked"] += 1
                 add_log(f"❌ {username}: Captcha failed - {solve_result.get('message', 'unknown')}", "red")
                 return
         else:
-            update_stats("errors")
+            with stats_lock:
+                stats["errors"] += 1
+                stats["checked"] += 1
             add_log(f"⚠️ Error ({status}): {username}", "red")
             return
 
     except Exception as e:
-        update_stats("errors")
+        with stats_lock:
+            stats["errors"] += 1
+            stats["checked"] += 1
         error_msg = str(e)[:40]
         if "greenlet" not in error_msg.lower() and "thread" not in error_msg.lower():
             add_log(f"❌ Error: {error_msg}", "red")

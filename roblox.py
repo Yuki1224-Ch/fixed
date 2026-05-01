@@ -161,6 +161,8 @@ class Roblox:
         acc_info = AccountInfo.get_account_info(self.session, user_id_and_cookie["userId"])
         combo = f"{self.account[0]}:{self.account[1]}:{user_id_and_cookie['cookie']}"
 
+        Output("SUCCESS").log(f"Valid account: {self.account[0]}:{self.account[1][:3]}***")
+
         with lock.get_lock():
             open("output/valid_combo.txt", "a", encoding="utf-8").write(combo + "\n")
 
@@ -216,12 +218,14 @@ class Roblox:
 
     def _invalid(self):
         combo = f"{self.account[0]}:{self.account[1]}"
+        Output("ERROR").log(f"Invalid account: {combo}")
         with lock.get_lock():
             open("output/invalid.txt", "a", encoding="utf-8").write(combo + "\n")
             self.invalid.append(combo + "\n")
 
     def _locked(self):
         combo = f"{self.account[0]}:{self.account[1]}"
+        Output("WARNING").log(f"Locked account: {combo}")
         with lock.get_lock():
             open("output/locked.txt", "a", encoding="utf-8").write(combo + "\n")
             self.locked.append(combo + "\n")
@@ -229,6 +233,8 @@ class Roblox:
     def _banned(self, term):
         combo = f"{self.account[0]}:{self.account[1]}"
         file = "output/terminated.txt" if term else "output/temp_banned.txt"
+        status = "Terminated" if term else "Temp Banned"
+        Output("ERROR").log(f"{status} account: {combo}")
         with lock.get_lock():
             open(file, "a", encoding="utf-8").write(combo + "\n")
 
